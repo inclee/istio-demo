@@ -1,0 +1,117 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: foreend
+    version: v1
+  name: foreend
+  namespace: istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: foreend
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: foreend
+        version: v1
+    spec:
+      containers:
+      - image: inclee/foreend:latest
+        imagePullPolicy: Always
+        name: foreend
+        ports:
+        - containerPort: 80
+        env:
+        - name: BACKEND_SERVICE_URL 
+          value: "http://backend-service.istio-demo.svc.cluster.local"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foreend-service
+  namespace: istio-demo 
+spec:
+  selector:
+    app: foreend
+  ports:
+    - port: 80
+      name: http
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: foreend
+  namespace: istio-demo 
+spec:
+  host: foreend-service
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: foreend
+  namespace: istio-demo 
+spec:
+  hosts:
+  - "istio-demo.com"
+  gateways:
+  - istio-system/istio-demo-gateway
+  http:
+  - match: # 重定向
+    - uri:
+        prefix: /notexist
+    redirect:
+      uri: /default
+      authority: istio-demo.com
+  - match: # 重写
+    - uri:
+        prefix: /rewrite 
+    rewrite:
+      uri: /?panic=1
+    retries:  # 重试
+        attempts: 3
+        perTryTimeout: 2s
+        retryOn: 5xx
+    route:
+    - destination:
+        host: foreend-service
+        subset: v1
+  - match: # 故障注入超时 curl -m 1 -v http://istio-demo.com/delay
+    - uri:
+        prefix: /delay
+    fault:
+      delay:  
+        fixedDelay: 3s
+        percent: 100
+    route:
+    - destination:
+        host: foreend-service
+        subset: v1
+  - match: # 故障注入中断 curl -m 1 -v http://istio-demo.com/abort
+    - uri:
+        prefix: /abort
+    fault:
+      abort:
+        httpStatus: 500
+        percentage: 
+          value: 100
+    route:
+    - destination:
+        host: foreend-service
+        subset: v1
+# 默认路由
+  - route:
+    - destination:
+        host: foreend-service
+        subset: v1
+        #timeout: 500ms

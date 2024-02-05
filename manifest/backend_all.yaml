@@ -1,0 +1,171 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: curl
+    version: v1
+  name: curl-v1
+  namespace: istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: curl
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: curl
+        version: v1
+    spec:
+      containers:
+      - image: curlimages/curl
+        name: curl 
+        command: [ "/bin/sh", "-c", "--" ]
+        args: [ "while true; do sleep 30; done;" ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: backend
+    version: v1
+  name: backend-v1
+  namespace: istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: backend
+        version: v1
+    spec:
+      containers:
+      - image: inclee/backend:v1
+        imagePullPolicy: Always
+        name: backend
+        ports:
+        - containerPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: backend
+    version: v2
+  name: backend-v2
+  namespace: istio-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: backend
+        version: v2
+    spec:
+      containers:
+      - image: inclee/backend:v2
+        imagePullPolicy: Always
+        name: backend
+        ports:
+        - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: istio-demo 
+  labels:
+    app: backend
+    service: backend-service
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      name: http
+
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: backend
+  namespace: istio-demo 
+spec:
+  host: backend-service
+  trafficPolicy:
+    loadBalancer:
+      simple: ROUND_ROBIN # 轮训复杂均衡
+      # simple: RANDOM # 随机复杂均衡
+    connectionPool:
+      tcp:
+        maxConnections: 1
+      http:
+        http1MaxPendingRequests: 1
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      interval: 1s #每隔1秒发现一次异常
+      consecutive5xxErrors: 2 #连续两次出错就会被认为是异常
+      baseEjectionTime: 5m #发现为异常的实例将在30s内被排除
+      maxEjectionPercent: 100 #安全策略，保证即使某些实例被识别为异常，仍有50%的实例可用，避免全部实例都被熔断
+  subsets:
+  - name: v1
+    labels:
+      version: v1
+  - name: v2
+    labels:
+      version: v2
+
+---
+#根据比例进行流量分发
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: backend
+  namespace: istio-demo 
+spec:
+  hosts:
+  - backend-service
+  http:
+  - route:
+    - destination:
+        host: backend-service
+        subset: v1
+      weight: 50
+    - destination:
+        host: backend-service
+        subset: v2
+      weight: 50
+---
+#根据匹配内容继续流量分发
+# apiVersion: networking.istio.io/v1alpha3
+# kind: VirtualService
+# metadata:
+#   name: backend
+#   namespace: istio-demo 
+# spec:
+#   hosts:
+#   - backend-service
+#   http:
+#   - match:
+#     - headers:
+#         User-Agent:
+#           regex: .*(Chrome/([\d.]+)).*  
+#     route:
+#       - destination:
+#           host: backend-service
+#           subset: v1
+#   - route:
+#     - destination:
+#         host: backend-service
+#         subset: v2
+    #timeout: 5ms
